@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+nemo_toolkit[asr]
+python-multipart
+pydub
+celery[redis]
+redis
