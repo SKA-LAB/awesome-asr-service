@@ -5,3 +5,7 @@ python-multipart
 pydub
 celery[redis]
 redis
+langchain_ollama
+streamlit
+requests
+slowapi
