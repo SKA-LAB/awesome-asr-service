@@ -40,6 +40,7 @@ COPY .env .
 
 # Make run script executable
 RUN chmod +x /app/run.sh
+RUN chmod +x /app/chunk_mp3.sh
 
 # Set environment variables
 ENV TEMP_DIR=/app/tmp
@@ -53,7 +54,7 @@ ENV REDIS_URL=redis://redis:6379/0
 ENV OLLAMA_BASE_URL=http://host.docker.internal:11434
 ENV OUTPUT_DIR=/meeting-notes
 ENV BATCH_DIRECTORY=/meeting-recordings
-ENV CHUNK_SCRIPT=chunk_mp3.sh
+ENV CHUNK_SCRIPT=/app/chunk_mp3.sh
 
 # Expose ports for both FastAPI and Streamlit
 EXPOSE 8000

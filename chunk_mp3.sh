@@ -89,6 +89,35 @@ format_time() {
     printf "%02d:%02d:%02d" $((seconds/3600)) $((seconds%3600/60)) $((seconds%60))
 }
 
+# First, convert any M4A files to MP3
+echo "Scanning for M4A files in $INPUT_DIR..."
+find "$INPUT_DIR" -type f -name "*.m4a" | while read -r file; do
+    filename=$(basename "$file")
+    base_name="${filename%.*}"
+    mp3_file="$INPUT_DIR/${base_name}.mp3"
+    
+    echo "Converting: $filename to MP3"
+    
+    # Convert M4A to MP3
+    ffmpeg -v warning -i "$file" -acodec libmp3lame -q:a 2 "$mp3_file"
+    
+    if [ $? -ne 0 ]; then
+        echo "  Error: Failed to convert $filename to MP3"
+    else
+        echo "  Successfully converted to: $(basename "$mp3_file")"
+        
+        # Delete the original M4A file
+        rm "$file"
+        if [ $? -ne 0 ]; then
+            echo "  Warning: Failed to delete original M4A file: $filename"
+        else
+            echo "  Original M4A file deleted successfully"
+        fi
+    fi
+    
+    echo
+done
+
 # Process each MP3 file in the input directory
 echo "Scanning for MP3 files in $INPUT_DIR..."
 find "$INPUT_DIR" -type f -name "*.mp3" | while read -r file; do
@@ -115,6 +144,9 @@ find "$INPUT_DIR" -type f -name "*.mp3" | while read -r file; do
     temp_dir=$(mktemp -d)
     base_name="${filename%.*}"
     
+    # Flag to track if all chunks were created successfully
+    all_chunks_successful=true
+    
     # Split the file into chunks
     for (( i=0; i<num_chunks; i++ )); do
         start_time=$((i * MAX_DURATION - (i > 0 ? OVERLAP : 0)))
@@ -137,6 +169,7 @@ find "$INPUT_DIR" -type f -name "*.mp3" | while read -r file; do
         
         if [ $? -ne 0 ]; then
             echo "  Error: Failed to create chunk $((i+1))/$num_chunks"
+            all_chunks_successful=false
         else
             echo "  Successfully created: $(basename "$chunk_file")"
         fi
@@ -145,9 +178,22 @@ find "$INPUT_DIR" -type f -name "*.mp3" | while read -r file; do
     # Remove the temporary directory
     rm -rf "$temp_dir"
     
+    # Delete the original file if all chunks were created successfully
+    if [ "$all_chunks_successful" = true ]; then
+        echo "  All chunks created successfully. Deleting original file: $filename"
+        rm "$file"
+        if [ $? -ne 0 ]; then
+            echo "  Warning: Failed to delete original file: $filename"
+        else
+            echo "  Original file deleted successfully"
+        fi
+    else
+        echo "  Warning: Some chunks failed to create. Original file will not be deleted."
+    fi
+    
     echo "  Finished processing $filename"
     echo
 done
 
-echo "All MP3 files processed successfully!"
+echo "All audio files processed successfully!"
 exit 0
