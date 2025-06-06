@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Body, Depends, HTTPException
+from fastapi import FastAPI, File, UploadFile, Body
 from starlette.requests import Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -12,11 +12,16 @@ import os
 import logging
 import time
 from fastapi.middleware.cors import CORSMiddleware
+from app.notion_integration import NotionIntegration
+from datetime import datetime
+from typing import Optional, List
 
 TEMP_DIR = os.environ.get("TEMP_DIR", "/tmp")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/meeting-notes")
 
 # docker build -t asr-service .
-# docker run -p 8585:8000 -p 8586:8501 --rm asr-service
+# docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /Users/kbhattacha/Documents/meeting-notes:/meeting-notes --name asr-service-local --rm asr-service
 
 # Configure logging
 logging.basicConfig(
@@ -79,12 +84,16 @@ async def log_requests(request, call_next):
 async def transcribe(request: Request, file: UploadFile = File(...)):
     logger.info(f"Transcription request received for file: {file.filename}")
     
-    if file.content_type != "audio/mpeg":
+    if file.content_type not in ["audio/mpeg", "audio/mp4", "audio/x-m4a"]:
         logger.warning(f"Invalid file type: {file.content_type}")
-        return JSONResponse(status_code=400, content={"error": "Only MP3 files are supported."})
+        return JSONResponse(status_code=400, content={"error": "Only MP3 and M4A files are supported."})
     
     task_id = str(uuid.uuid4())
-    temp_path = f"{TEMP_DIR}/{task_id}.mp3"
+    file_extension = os.path.splitext(file.filename)[1].lower()
+    if file_extension not in ['.mp3', '.m4a']:
+        file_extension = '.mp3' if file.content_type == "audio/mpeg" else '.m4a'
+    
+    temp_path = f"{TEMP_DIR}/{task_id}{file_extension}"
     logger.info(f"Created task ID: {task_id}")
     
     try:
@@ -157,9 +166,9 @@ async def summarize_meeting(request: Request, transcript: str = Body(..., embed=
             # Process each chunk
             chunk_summaries = []
             llm = ChatOllama(temperature=0.2,
-                         model="qwen2.5:7b",
+                         model="qwen2.5:3b",
                          api_key="null",
-                         base_url="http://localhost:11434")
+                         base_url=OLLAMA_BASE_URL)
             
             for i, chunk in enumerate(chunks):
                 logger.info(f"Processing chunk {i+1}/{len(chunks)}")
@@ -176,8 +185,12 @@ Summarize this part of a meeting transcript. Focus on key points and any action 
             logger.info("Creating final summary from chunk summaries")
             
             final_prompt = f"""
-You are an expert meeting assistant. Based on these summaries of different parts of a meeting transcript, 
-create a cohesive final summary with two clear sections:
+You are an expert meeting assistant. Your task is to review the combined summaries of meeting transcripts and create a consolidated summary that captures the essential information,
+focusing on key takeaways and action items assigned to specific individuals or departments during the meeting.
+Use clear and professional language, and organize the summary in a logical manner using appropriate formatting such as
+headings, subheadings, and bullet points. Ensure that the summary is easy to understand and provides a comprehensive but succinct
+overview of the meeting's content, with a particular focus on clearly indicating who is responsible for each action item.
+
 1. ## Meeting Summary
 2. ## Action Items (as a bullet list)
 
@@ -192,7 +205,11 @@ Summaries from different parts of the transcript:
         else:
             # Original approach for shorter transcripts
             prompt = f"""
-You are an expert meeting assistant. Summarize the following transcript and extract action items or to-dos.
+Your task is to review the provided meeting notes and create a concise summary that captures the essential information,
+focusing on key takeaways and action items assigned to specific individuals or departments during the meeting. Use clear
+and professional language, and organize the summary in a logical manner using appropriate formatting such as headings,
+subheadings, and bullet points. Ensure that the summary is easy to understand and provides a comprehensive but succinct
+overview of the meeting's content, with a particular focus on clearly indicating who is responsible for each action item.
 Respond in well-formatted Markdown with two sections. Add sub-sections as needed for the summary and action items:
 1. ## Meeting Summary
 2. ## Action Items (as a bullet list)
@@ -202,9 +219,9 @@ Transcript:
 """
             logger.info("Initializing Ollama LLM")
             llm = ChatOllama(temperature=0.2,
-                         model="qwen2.5:7b",
+                         model="qwen2.5:3b",
                          api_key="null",
-                         base_url="http://localhost:11434")
+                         base_url=OLLAMA_BASE_URL)
             
             logger.info("Sending request to Ollama")
             response = llm.invoke(prompt)
@@ -218,33 +235,163 @@ Transcript:
 
 @app.post("/transcribe-and-summarize/")
 @limiter.limit("10/minute")
-async def transcribe_and_summarize(request: Request, file: UploadFile = File(...)):
+async def transcribe_and_summarize(
+    request: Request, 
+    file: UploadFile = File(...), 
+    save_to_file: bool = False,
+    save_to_notion: bool = False,
+    meeting_date: Optional[str] = None,
+    participants: Optional[List[str]] = None
+):
     logger.info(f"Transcribe and summarize request received for file: {file.filename}")
     
-    if file.content_type != "audio/mpeg":
+    if file.content_type not in ["audio/mpeg", "audio/mp4", "audio/x-m4a"]:
         logger.warning(f"Invalid file type: {file.content_type}")
-        return JSONResponse(status_code=400, content={"error": "Only MP3 files are supported."})
+        return JSONResponse(status_code=400, content={"error": "Only MP3 and M4A files are supported."})
 
     task_id = str(uuid.uuid4())
-    temp_path = f"{TEMP_DIR}/{task_id}.mp3"
+    file_extension = os.path.splitext(file.filename)[1].lower()
+    if file_extension not in ['.mp3', '.m4a']:
+        file_extension = '.mp3' if file.content_type == "audio/mpeg" else '.m4a'
+    
+    temp_path = f"{TEMP_DIR}/{task_id}{file_extension}"
     logger.info(f"Created task ID: {task_id}")
     
     try:
-        with open(temp_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-            logger.info(f"Saved file to {temp_path}, size: {len(content)} bytes")
-            
-        # Use the synchronous version for immediate processing
-        logger.info("Starting synchronous transcription")
-        from app.utils import convert_and_transcribe
-        transcription = convert_and_transcribe(temp_path)
-        logger.info(f"Transcription completed, length: {len(transcription)} chars")
+        # Save uploaded file to temp location
+        await save_uploaded_file(file, temp_path)
         
-        # Now summarize the transcription
-        logger.info("Starting summarization")
-        prompt = f"""
-You are an expert meeting assistant. Summarize the following transcript and extract action items or to-dos.
+        # Process the audio file
+        title, transcription, markdown_output = await process_audio_file(temp_path, file.filename)
+        
+        # Save results if requested
+        file_path = save_to_file_system(save_to_file, OUTPUT_DIR, file.filename, transcription, markdown_output)
+        
+        # Save to Notion if requested
+        notion_page_url = await save_to_notion_db(save_to_notion, title, markdown_output, transcription, meeting_date, participants)
+        
+        return {
+            "title": title,
+            "transcription": transcription,
+            "summary_markdown": markdown_output,
+            "saved_to_file": file_path if save_to_file else None,
+            "saved_to_notion": notion_page_url
+        }
+    except Exception as e:
+        logger.error(f"Processing failed: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": f"Processing failed: {str(e)}"})
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            logger.info(f"Cleaned up temporary file: {temp_path}")
+
+async def save_uploaded_file(file: UploadFile, temp_path: str) -> None:
+    """Save the uploaded file to a temporary location."""
+    with open(temp_path, "wb") as buffer:
+        content = await file.read()
+        buffer.write(content)
+        logger.info(f"Saved file to {temp_path}, size: {len(content)} bytes")
+
+async def process_audio_file(temp_path: str, filename: str) -> tuple:
+    """Process the audio file to get transcription and summary."""
+    # Transcribe the audio
+    logger.info("Starting synchronous transcription")
+    from app.utils import convert_and_transcribe
+    transcription = convert_and_transcribe(temp_path)
+    logger.info(f"Transcription completed, length: {len(transcription)} chars")
+    
+    # Summarize the transcription
+    logger.info("Starting summarization")
+    markdown_output = await generate_summary(transcription)
+    
+    # Create a title from the filename
+    title = f"{filename.split('.')[0]}"
+    
+    return title, transcription, markdown_output
+
+async def generate_summary(transcription: str) -> str:
+    """
+    Generate a summary from the transcription using Ollama.
+    For long transcripts, uses a chunking approach to handle context window limitations.
+    """
+    transcript_length = len(transcription)
+    logger.info(f"Processing transcript of length: {transcript_length} chars")
+    
+    # Initialize LLM
+    logger.info("Initializing Ollama LLM")
+    llm = ChatOllama(temperature=0.2,
+                     model="qwen2.5:3b",
+                     api_key="null",
+                     base_url=OLLAMA_BASE_URL)
+    
+    # Check if transcript is very long
+    if transcript_length > 10000:  # Adjust this threshold based on model's capabilities
+        logger.info(f"Long transcript detected ({transcript_length} chars). Using chunking approach.")
+        return await process_long_transcript(transcription, llm)
+    else:
+        logger.info("Using standard approach for shorter transcript")
+        return await process_standard_transcript(transcription, llm)
+
+async def process_long_transcript(transcription: str, llm: ChatOllama) -> str:
+    """Process a long transcript using chunking approach."""
+    # Split transcript into chunks
+    chunk_size = 8000  # Adjust based on model context window
+    overlap = 500  # Overlap between chunks to maintain context
+    transcript_length = len(transcription)
+    chunks = []
+    
+    for i in range(0, transcript_length, chunk_size - overlap):
+        chunk = transcription[i:i + chunk_size]
+        chunks.append(chunk)
+        
+    logger.info(f"Split transcript into {len(chunks)} chunks")
+    
+    # Process each chunk
+    chunk_summaries = []
+    
+    for i, chunk in enumerate(chunks):
+        logger.info(f"Processing chunk {i+1}/{len(chunks)}")
+        chunk_prompt = f"""
+Summarize this part of a meeting transcript. Focus on key points and any action items mentioned:
+
+{chunk}
+"""
+        response = llm.invoke(chunk_prompt)
+        chunk_summaries.append(response.content.strip())
+        
+    # Combine chunk summaries and create final summary
+    combined_summary = "\n\n".join(chunk_summaries)
+    logger.info("Creating final summary from chunk summaries")
+    
+    final_prompt = f"""
+You are an expert meeting assistant. Your task is to review the combined summaries of meeting transcripts and create a consolidated summary that captures the essential information,
+focusing on key takeaways and action items assigned to specific individuals or departments during the meeting.
+Use clear and professional language, and organize the summary in a logical manner using appropriate formatting such as
+headings, subheadings, and bullet points. Ensure that the summary is easy to understand and provides a comprehensive but succinct
+overview of the meeting's content, with a particular focus on clearly indicating who is responsible for each action item.
+
+1. ## Meeting Summary
+2. ## Action Items (as a bullet list)
+
+Make sure to consolidate duplicate information and present a unified view.
+
+Summaries from different parts of the transcript:
+{combined_summary}
+"""
+    response = llm.invoke(final_prompt)
+    markdown_output = response.content.strip()
+    logger.info(f"Received consolidated summary, length: {len(markdown_output)} chars")
+    
+    return markdown_output
+
+async def process_standard_transcript(transcription: str, llm: ChatOllama) -> str:
+    """Process a standard-length transcript."""
+    prompt = f"""
+Your task is to review the provided meeting notes and create a concise summary that captures the essential information,
+focusing on key takeaways and action items assigned to specific individuals or departments during the meeting. Use clear
+and professional language, and organize the summary in a logical manner using appropriate formatting such as headings,
+subheadings, and bullet points. Ensure that the summary is easy to understand and provides a comprehensive but succinct
+overview of the meeting's content, with a particular focus on clearly indicating who is responsible for each action item.
 Respond in well-formatted Markdown with two sections. Add sub-sections as needed for the summary and action items:
 1. ## Meeting Summary
 2. ## Action Items (as a bullet list)
@@ -252,27 +399,76 @@ Respond in well-formatted Markdown with two sections. Add sub-sections as needed
 Transcript:
 {transcription}
 """
-        logger.info("Initializing Ollama LLM")
-        llm = ChatOllama(temperature=0.2,
-                         model="qwen2.5:7b",
-                         api_key="null",
-                         base_url="http://localhost:11434")
+    logger.info("Sending request to Ollama")
+    response = llm.invoke(prompt)
+    markdown_output = response.content.strip()
+    logger.info(f"Received summary from Ollama, length: {len(markdown_output)} chars")
+    
+    return markdown_output
+
+def save_to_file_system(save_to_file: bool, output_dir: str, filename: str, transcription: str, markdown_output: str) -> Optional[str]:
+    """Save the transcription and summary to a file if requested."""
+    if not save_to_file:
+        return None
         
-        logger.info("Sending request to Ollama")
-        response = llm.invoke(prompt)
-        markdown_output = response.content.strip()
-        logger.info(f"Received summary from Ollama, length: {len(markdown_output)} chars")
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create a filename based on the original file and timestamp
+    base_filename = filename.split('.')[0]
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    file_path = f"{output_dir}/{base_filename}_{timestamp}.md"
+    
+    # Write the content to the file
+    with open(file_path, "w") as f:
+        f.write(f"# {base_filename} - Transcript and Summary\n\n")
+        f.write("## Full Transcript\n\n")
+        f.write("```\n")
+        f.write(transcription)
+        f.write("\n```\n\n")
+        f.write("## Summary\n\n")
+        f.write(markdown_output)
+    
+    logger.info(f"Saved transcript and summary to {file_path}")
+    return file_path
+
+async def save_to_notion_db(save_to_notion: bool, title: str, summary: str, transcript: str, 
+                           meeting_date: Optional[str], participants: Optional[List[str]]) -> Optional[str]:
+    """Save the transcription and summary to Notion if requested."""
+    if not save_to_notion:
+        return None
         
-        return {
-            "transcription": transcription,
-            "summary_markdown": markdown_output
-        }
+    try:
+        logger.info("Saving to Notion")
+        notion = NotionIntegration()
+        
+        # Parse meeting date if provided, otherwise use current date
+        meeting_datetime = None
+        if meeting_date:
+            try:
+                meeting_datetime = datetime.strptime(meeting_date, "%Y-%m-%d")
+            except ValueError:
+                logger.warning(f"Invalid meeting date format: {meeting_date}. Using current date.")
+                meeting_datetime = datetime.now()
+        else:
+            meeting_datetime = datetime.now()
+        
+        # Create the page in Notion
+        notion_response = notion.create_meeting_page(
+            title=title,
+            summary=summary,
+            transcript=transcript,
+            meeting_date=meeting_datetime,
+            participants=participants
+        )
+        
+        notion_page_url = notion_response.get("url")
+        logger.info(f"Successfully saved to Notion: {notion_page_url}")
+        return notion_page_url
     except Exception as e:
-        logger.error(f"Processing failed: {str(e)}", exc_info=True)
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            logger.info(f"Cleaned up temporary file: {temp_path}")
+        logger.error(f"Failed to save to Notion: {str(e)}")
+        # Don't fail the whole request if Notion integration fails
+        return None
 
 @app.get("/health")
 @limiter.limit("10/minute")
@@ -281,7 +477,7 @@ async def health_check(request: Request):
     try:
         # Check if Ollama service is available
         logger.info("Testing Ollama service")
-        llm = ChatOllama(model="qwen2.5:7b", api_key="null", base_url="http://localhost:11434")
+        llm = ChatOllama(model="qwen2.5:3b", api_key="null", base_url=OLLAMA_BASE_URL)
         llm.invoke("Hello")
         logger.info("Ollama service is available")
         

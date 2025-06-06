@@ -21,12 +21,15 @@ export API_URL="http://localhost:${PORT:-8000}"
 
 # Start Streamlit dashboard in background
 echo "Starting Streamlit dashboard..."
-STREAMLIT_PORT=${DASHBOARD_PORT:-8501}
-streamlit run app/dashboard.py --server.port $STREAMLIT_PORT --server.address 0.0.0.0 &
+STREAMLIT_PORT_1=${DASHBOARD_PORT_1:-8501}
+STREAMLIT_PORT_2=${DASHBOARD_PORT_2:-8502}
+streamlit run app/dashboard.py --server.port $STREAMLIT_PORT_1 --server.address 0.0.0.0 &
+streamlit run app/meeting_explorer.py --server.port $STREAMLIT_PORT_2 --server.address 0.0.0.0 &
 
 # Wait for Streamlit to initialize
 sleep 2
-echo "Streamlit dashboard running on port $STREAMLIT_PORT"
+echo "Meeting extraction dashboard running on port $STREAMLIT_PORT_1"
+echo "Meeting explorer dashboard running on port $STREAMLIT_PORT_2"
 
 # Start FastAPI application with Uvicorn
 echo "Starting FastAPI application..."

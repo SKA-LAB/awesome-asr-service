@@ -25,30 +25,40 @@ RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
 # Download the ASR model during build time
-RUN python -c "import nemo.collections.asr as nemo_asr; nemo_asr.models.ASRModel.from_pretrained(model_name='nvidia/parakeet-tdt-0.6b-v2')"
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base')"
 
 # Create directory for temporary files
 RUN mkdir -p /app/tmp
+RUN mkdir /meeting-notes
+RUN mkdir /meeting-recordings
 
 # Copy application code
 COPY app/ /app/app/
 COPY run.sh /app/
+COPY chunk_mp3.sh /app/
+COPY .env .
 
 # Make run script executable
 RUN chmod +x /app/run.sh
 
 # Set environment variables
 ENV TEMP_DIR=/app/tmp
+ENV WHISPER_MODEL_SIZE=base
 ENV PORT=8000
-ENV DASHBOARD_PORT=8501
+ENV DASHBOARD_PORT_1=8501
+ENV DASHBOARD_PORT_2=8502
 ENV WORKERS=1
 ENV PYTHONPATH=/app
 ENV REDIS_URL=redis://redis:6379/0
 ENV OLLAMA_BASE_URL=http://host.docker.internal:11434
+ENV OUTPUT_DIR=/meeting-notes
+ENV BATCH_DIRECTORY=/meeting-recordings
+ENV CHUNK_SCRIPT=chunk_mp3.sh
 
 # Expose ports for both FastAPI and Streamlit
 EXPOSE 8000
 EXPOSE 8501
+EXPOSE 8502
 
 # Run the application with the script
 CMD ["/app/run.sh"]

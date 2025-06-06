@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-nemo_toolkit[asr]
 python-multipart
 pydub
 celery[redis]
@@ -9,3 +8,9 @@ langchain_ollama
 streamlit
 requests
 slowapi
+faster-whisper
+python-dotenv
+notion-client
+wordcloud
+matplotlib
+pandas
