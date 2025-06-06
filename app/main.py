@@ -21,7 +21,7 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/meeting-notes")
 
 # docker build -t asr-service .
-# docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /Users/kbhattacha/Documents/meeting-notes:/meeting-notes --name asr-service-local --rm asr-service
+# docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /Users/kbhattacha/Documents/meeting-notes:/meeting-notes -v /Users/kbhattacha/Music/Piezo:/meeting-recordings --name asr-service-local --rm asr-service
 
 # Configure logging
 logging.basicConfig(

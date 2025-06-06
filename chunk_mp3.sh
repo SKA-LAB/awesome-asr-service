@@ -2,7 +2,7 @@
 # File: /Users/kbhattacha/Documents/asr-service-fast-api/chunk_mp3.sh
 
 # Set default values
-MAX_DURATION=1800  # Maximum duration in seconds (30 minutes)
+MAX_DURATION=3600  # Maximum duration in seconds (30 minutes)
 OVERLAP=5          # Overlap between chunks in seconds
 OUTPUT_DIR=""      # By default, output to the same directory as input
 
