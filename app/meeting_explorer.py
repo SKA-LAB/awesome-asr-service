@@ -349,7 +349,7 @@ def display_search_interface():
                         if st.button("View Full Meeting", key=f"view_{file_info['name']}"):
                             st.session_state.selected_tab = "viewer"
                             st.session_state.selected_meeting = file_info["display_name"]
-                            st.experimental_rerun()
+                            st.rerun()
 
 def display_analytics():
     """Display analytics about meeting notes."""
