@@ -7,6 +7,7 @@ from pathlib import Path
 import requests
 from typing import List, Dict, Any, Optional, Tuple
 import time
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -63,11 +64,11 @@ class SemanticSearchEngine:
         for attempt in range(max_retries):
             try:
                 response = requests.post(
-                    f"{OLLAMA_BASE_URL}/api/embeddings",
-                    json={"model": EMBEDDING_MODEL, "prompt": text}
+                    f"{OLLAMA_BASE_URL}/api/embed",
+                    json={"model": EMBEDDING_MODEL, "input": text}
                 )
                 response.raise_for_status()
-                embedding = np.array(response.json()["embedding"], dtype=np.float32)
+                embedding = np.array(response.json()["embeddings"], dtype=np.float32)
                 return embedding
             except Exception as e:
                 logger.warning(f"Embedding attempt {attempt+1} failed: {str(e)}")
@@ -104,32 +105,78 @@ class SemanticSearchEngine:
         
         # Process summary
         if summary:
-            # For summary, we'll keep it as a single chunk as summaries are typically shorter
-            summary_embedding = self.get_embedding(summary)
+            logger.info(f"Embedding summary for {file_info['display_name']}")
             
-            # Add to summary index
-            if file_id in self.metadata:
-                # Remove old summary embedding
-                old_idx = self.metadata[file_id].get("summary_idx")
-                if old_idx is not None:
-                    # We can't easily remove from FAISS, so we'll just track the active indices
-                    self.metadata[file_id]["summary_idx_active"] = False
-            
-            # Add new embedding
-            summary_idx = self.summary_index.ntotal
-            self.summary_index.add(np.array([summary_embedding]))
-            
-            # Update metadata
-            if file_id not in self.metadata:
-                self.metadata[file_id] = {}
-            
-            self.metadata[file_id].update({
-                "summary_idx": summary_idx,
-                "summary_idx_active": True,
-                "display_name": file_info["display_name"],
-                "date": file_info["date"].isoformat() if hasattr(file_info["date"], "isoformat") else str(file_info["date"]),
-                "last_modified": os.path.getmtime(file_id)
-            })
+            # Check if summary is long enough to warrant chunking
+            if len(summary.split()) > 500:  # If summary has more than 500 words
+                logger.info(f"Summary is long, chunking it for better embedding")
+                summary_chunks = self.chunk_text(summary, chunk_size=500, overlap=100)
+                
+                # Remove old summary embeddings if they exist
+                if file_id in self.metadata:
+                    old_indices = self.metadata[file_id].get("summary_indices", [])
+                    for idx in old_indices:
+                        # Mark as inactive
+                        self.metadata[file_id]["summary_indices_active"] = [False] * len(old_indices)
+                
+                # Add new embeddings
+                summary_indices = []
+                summary_chunks_text = []
+                
+                for i, chunk in enumerate(summary_chunks):
+                    try:
+                        chunk_embedding = self.get_embedding(chunk)
+                        chunk_idx = self.summary_index.ntotal
+                        self.summary_index.add(chunk_embedding)
+                        summary_indices.append(chunk_idx)
+                        summary_chunks_text.append(chunk)
+                        logger.info(f"Added summary chunk {i+1}/{len(summary_chunks)} embedding at index {chunk_idx}")
+                    except Exception as e:
+                        logger.error(f"Error embedding summary chunk {i}: {str(e)}")
+                
+                # Update metadata
+                if file_id not in self.metadata:
+                    self.metadata[file_id] = {}
+                
+                self.metadata[file_id].update({
+                    "summary_indices": summary_indices,
+                    "summary_indices_active": [True] * len(summary_indices),
+                    "summary_chunks": summary_chunks_text,
+                    "is_chunked_summary": True,
+                    "display_name": file_info["display_name"],
+                    "date": file_info["date"].isoformat() if hasattr(file_info["date"], "isoformat") else str(file_info["date"]),
+                    "last_modified": os.path.getmtime(file_id)
+                })
+            else:
+                # For shorter summaries, keep as a single chunk
+                summary_embedding = self.get_embedding(summary)
+                logger.info(f"Finished embedding summary.")
+                
+                # Add to summary index
+                if file_id in self.metadata:
+                    # Remove old summary embedding
+                    old_idx = self.metadata[file_id].get("summary_idx")
+                    if old_idx is not None:
+                        # We can't easily remove from FAISS, so we'll just track the active indices
+                        self.metadata[file_id]["summary_idx_active"] = False
+                
+                # Add new embedding
+                summary_idx = self.summary_index.ntotal
+                self.summary_index.add(summary_embedding)
+                logger.info(f"Added summary embedding at index {summary_idx}")
+                
+                # Update metadata
+                if file_id not in self.metadata:
+                    self.metadata[file_id] = {}
+                
+                self.metadata[file_id].update({
+                    "summary_idx": summary_idx,
+                    "summary_idx_active": True,
+                    "is_chunked_summary": False,
+                    "display_name": file_info["display_name"],
+                    "date": file_info["date"].isoformat() if hasattr(file_info["date"], "isoformat") else str(file_info["date"]),
+                    "last_modified": os.path.getmtime(file_id)
+                })
         
         # Process transcript
         if transcript:
@@ -151,11 +198,12 @@ class SemanticSearchEngine:
                 try:
                     chunk_embedding = self.get_embedding(chunk)
                     chunk_idx = self.transcript_index.ntotal
-                    self.transcript_index.add(np.array([chunk_embedding]))
+                    self.transcript_index.add(chunk_embedding)
                     transcript_indices.append(chunk_idx)
                     transcript_chunks_text.append(chunk)
                 except Exception as e:
                     logger.error(f"Error embedding transcript chunk {i}: {str(e)}")
+            logger.info(f"Added transcript embeddings at indices {transcript_indices}")
             
             # Update metadata
             if file_id not in self.metadata:
@@ -194,13 +242,14 @@ class SemanticSearchEngine:
         
         # Search in summaries
         if search_in_summaries and self.summary_index.ntotal > 0:
-            distances, indices = self.summary_index.search(np.array([query_embedding]), top_k)
+            distances, indices = self.summary_index.search(query_embedding, top_k)
             
             for i, idx in enumerate(indices[0]):
                 if idx != -1:  # Valid index
                     # Find document with this index
                     for file_id, meta in self.metadata.items():
-                        if meta.get("summary_idx") == idx and meta.get("summary_idx_active", True):
+                        # Check for single summary
+                        if meta.get("is_chunked_summary", False) == False and meta.get("summary_idx") == idx and meta.get("summary_idx_active", True):
                             results.append({
                                 "file_id": file_id,
                                 "display_name": meta["display_name"],
@@ -209,10 +258,27 @@ class SemanticSearchEngine:
                                 "type": "summary",
                                 "context": None  # Will be populated later
                             })
+                        
+                        # Check for chunked summaries
+                        elif meta.get("is_chunked_summary", False) == True:
+                            summary_indices = meta.get("summary_indices", [])
+                            summary_active = meta.get("summary_indices_active", [True] * len(summary_indices))
+                            
+                            for j, s_idx in enumerate(summary_indices):
+                                if s_idx == idx and summary_active[j]:
+                                    results.append({
+                                        "file_id": file_id,
+                                        "display_name": meta["display_name"],
+                                        "date": meta["date"],
+                                        "distance": float(distances[0][i]),
+                                        "type": "summary_chunk",
+                                        "chunk_index": j,
+                                        "context": meta.get("summary_chunks", [])[j] if j < len(meta.get("summary_chunks", [])) else None
+                                    })
         
         # Search in transcripts
         if search_in_transcripts and self.transcript_index.ntotal > 0:
-            distances, indices = self.transcript_index.search(np.array([query_embedding]), top_k)
+            distances, indices = self.transcript_index.search(query_embedding, top_k)
             
             for i, idx in enumerate(indices[0]):
                 if idx != -1:  # Valid index
@@ -236,7 +302,7 @@ class SemanticSearchEngine:
         # Sort results by distance (smaller is better)
         results.sort(key=lambda x: x["distance"])
         
-        # Populate context for summary results
+        # Populate context for non-chunked summary results
         for result in results:
             if result["type"] == "summary" and result["context"] is None:
                 with open(result["file_id"], 'r') as f:
@@ -259,15 +325,45 @@ class SemanticSearchEngine:
         # Process each file
         for file_info in meeting_files:
             try:
-                with open(file_info["path"], 'r') as f:
+                file_path = file_info["path"]
+                with open(file_path, 'r') as f:
                     content = f.read()
                 
-                # Extract summary and transcript
-                summary_match = re.search(r'## Summary\s+(.*?)(?=\Z|\n## )', content, re.DOTALL)
-                summary = summary_match.group(1) if summary_match else ""
+                # Extract summary and transcript with more robust regex patterns
+                summary = ""
+                transcript = ""
                 
-                transcript_match = re.search(r'## Full Transcript\s+```\s+(.*?)\s+```', content, re.DOTALL)
-                transcript = transcript_match.group(1) if transcript_match else ""
+                # Try different summary patterns
+                summary_patterns = [
+                    r'## Summary\s+(.*?)(?=\Z|\n## )',
+                    r'### Meeting Summary\s+(.*?)(?=\Z|\n###)',
+                    r'### Consolidated Summary\s+(.*?)(?=\Z|\n###)',
+                    r'### Summary\s+(.*?)(?=\Z|\n###)'
+                ]
+                
+                for pattern in summary_patterns:
+                    summary_match = re.search(pattern, content, re.DOTALL)
+                    if summary_match:
+                        summary = summary_match.group(1).strip()
+                        break
+                
+                # Try different transcript patterns
+                transcript_patterns = [
+                    r'## Full Transcript\s+```\s+(.*?)\s+```',
+                    r'### Full Transcript\s+```\s+(.*?)\s+```',
+                    r'## Transcript\s+```\s+(.*?)\s+```',
+                    r'### Transcript\s+```\s+(.*?)\s+```'
+                ]
+                
+                for pattern in transcript_patterns:
+                    transcript_match = re.search(pattern, content, re.DOTALL)
+                    if transcript_match:
+                        transcript = transcript_match.group(1).strip()
+                        break
+                
+                # Log what we found
+                logger.info(f"   Found summary: {summary[:50]}")
+                logger.info(f"   Found transcript: {transcript[:50]}")
                 
                 # Index document
                 self.index_document(file_info, summary, transcript)

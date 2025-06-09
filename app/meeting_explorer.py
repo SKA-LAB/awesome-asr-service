@@ -1,12 +1,25 @@
 import os
 import re
 import streamlit as st
+import faiss
 import glob
 from datetime import datetime
 import pandas as pd
 from pathlib import Path
 import concurrent.futures
 from functools import partial
+import indexing_utils
+import time
+from semantic_search import get_search_engine
+from rag_search import get_rag_search_engine
+
+# Initialize session state for search type
+if 'search_type' not in st.session_state:
+    st.session_state.search_type = "keyword"
+
+# Define constants for semantic search
+SEMANTIC_SEARCH_ENABLED = True
+RAG_SEARCH_ENABLED = True
 
 # Set page configuration
 st.set_page_config(
@@ -118,11 +131,38 @@ def search_in_file(file_info, query_lower, search_in_transcripts=True, search_in
         }
     return None
 
+
 def search_in_files(files, query, search_in_transcripts=True, search_in_summaries=True):
-    """Search for a query in the specified files using parallel processing."""
+    """Search for a query in the specified files using keyword or semantic search."""
     if not query.strip():
         return []
     
+    # Determine search type from session state
+    search_type = st.session_state.get('search_type', 'keyword')
+    
+    if search_type == "semantic" and SEMANTIC_SEARCH_ENABLED:
+        # Perform semantic search
+        try:
+            # First, ensure all files are indexed
+            with st.spinner("Indexing files for semantic search..."):
+                indexing_utils.index_meeting_files(files)
+            
+            # Then perform the search
+            with st.spinner("Performing semantic search..."):
+                results = indexing_utils.perform_semantic_search(
+                    query,
+                    files,
+                    search_in_summaries=search_in_summaries,
+                    search_in_transcripts=search_in_transcripts
+                )
+            return results
+        except Exception as e:
+            st.error(f"Semantic search failed: {str(e)}")
+            # Fall back to keyword search
+            st.warning("Falling back to keyword search")
+            search_type = "keyword"
+    
+    # Keyword search (original implementation)
     query_lower = query.lower()
     results = []
     
@@ -149,6 +189,18 @@ def search_in_files(files, query, search_in_transcripts=True, search_in_summarie
     results.sort(key=lambda x: x["match_count"], reverse=True)
     return results
 
+
+def ensure_files_indexed(files):
+    """Ensure all files are indexed for semantic search."""
+    if st.session_state.search_type == "semantic":
+        try:
+            indexing_utils.index_meeting_files(files)
+            return True
+        except Exception as e:
+            st.error(f"Failed to index files: {str(e)}")
+            return False
+    return True
+
 def display_meeting_viewer():
     """Display the meeting notes viewer interface."""
     st.header("📋 Meeting Notes Viewer")
@@ -162,6 +214,7 @@ def display_meeting_viewer():
     
     # Create a dropdown to select meeting
     meeting_options = [file["display_name"] for file in meeting_files]
+    meeting_options.reverse()
     selected_meeting = st.selectbox("Select a meeting", meeting_options)
     
     # Find the selected meeting file
@@ -222,6 +275,29 @@ def display_search_interface():
         search_in_summaries = st.checkbox("Summaries", value=True)
         search_in_transcripts = st.checkbox("Transcripts", value=True)
     
+    # Add search type selector
+    search_type = st.radio(
+        "Search Type",
+        ["Keyword Search", "Semantic Search", "RAG Search (AI-powered)"],
+        horizontal=True,
+        index=0 if st.session_state.search_type == "keyword" else 
+              1 if st.session_state.search_type == "semantic" else 2
+    )
+    if search_type == "Keyword Search":
+        st.session_state.search_type = "keyword"
+    elif search_type == "Semantic Search":
+        st.session_state.search_type = "semantic"
+    else:
+        st.session_state.search_type = "rag"
+    
+    # Add help text for search types
+    if st.session_state.search_type == "keyword":
+        st.caption("Keyword search finds exact matches of your search terms.")
+    elif st.session_state.search_type == "semantic":
+        st.caption("Semantic search finds content with similar meaning, even if the exact words are different.")
+    else:  # RAG search
+        st.caption("RAG search uses AI to understand your query and provide intelligent answers based on meeting content.")
+    
     # Add date range filter
     st.subheader("Filter by Date")
     
@@ -266,6 +342,25 @@ def display_search_interface():
     
     st.caption(f"Searching in {len(search_files)} meeting notes")
     
+    # Add index management for semantic search
+    if st.session_state.search_type in ["semantic", "rag"]:
+        with st.expander("Semantic Search Index Management"):
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Rebuild Search Index"):
+                    with st.spinner("Rebuilding search index..."):
+                        try:
+                            search_engine = get_search_engine()
+                            search_engine.reindex_all(meeting_files)
+                            st.success("Search index rebuilt successfully!")
+                        except Exception as e:
+                            st.error(f"Failed to rebuild index: {str(e)}")
+            
+            with col2:
+                index_stats = get_search_engine()
+                st.metric("Indexed Summaries", index_stats.summary_index.ntotal if index_stats.summary_index else 0)
+                st.metric("Indexed Transcript Chunks", index_stats.transcript_index.ntotal if index_stats.transcript_index else 0)
+    
     # Search button
     if st.button("Search", key="search_button") or search_query:
         if not search_query:
@@ -273,83 +368,163 @@ def display_search_interface():
         elif not (search_in_summaries or search_in_transcripts):
             st.warning("Please select at least one area to search in (Summaries or Transcripts)")
         else:
-            # Perform search
-            results = search_in_files(
-                search_files, 
-                search_query, 
-                search_in_transcripts=search_in_transcripts,
-                search_in_summaries=search_in_summaries
-            )
+            # Show search type
+            search_type_display = "RAG Search (AI-powered)" if st.session_state.search_type == "rag" else \
+                                 "Semantic Search" if st.session_state.search_type == "semantic" else "Keyword Search"
+            st.info(f"Performing {search_type_display} for '{search_query}'")
             
-            if not results:
-                st.info(f"No results found for '{search_query}'")
+            # Perform search
+            start_time = time.time()
+            if st.session_state.search_type == "rag":
+                # Perform RAG search
+                with st.spinner("AI is analyzing your query and searching through meetings..."):
+                    try:
+                        rag_engine = get_rag_search_engine()
+                        rag_results = rag_engine.search(search_query)
+                        search_time = time.time() - start_time
+                        
+                        if rag_results["success"]:
+                            st.success(f"Search completed in {search_time:.2f} seconds")
+                            
+                            # Display the AI answer
+                            st.subheader("AI Answer")
+                            st.markdown(rag_results["answer"])
+                            
+                            # Show thought process in an expander
+                            with st.expander("View AI reasoning process"):
+                                st.markdown(rag_results["thought_process"])
+                            # Display snippets in an expander
+                            with st.expander("View AI snippets"):
+                                st.markdown("\n\n".join(rag_results["snippets"]))
+                        else:
+                            st.error("AI search failed. Please try another search type or refine your query.")
+                    except Exception as e:
+                        st.error(f"Error during RAG search: {str(e)}")
             else:
-                st.success(f"Found matches in {len(results)} meeting notes")
+                # Perform keyword or semantic search
+                results = search_in_files(
+                    search_files, 
+                    search_query, 
+                    search_in_transcripts=search_in_transcripts,
+                    search_in_summaries=search_in_summaries
+                )
+                search_time = time.time() - start_time
                 
-                # Display results
-                for result in results:
-                    file_info = result["file_info"]
+                if not results:
+                    st.info(f"No results found for '{search_query}'")
+                else:
+                    st.success(f"Found matches in {len(results)} meeting notes (in {search_time:.2f} seconds)")
                     
-                    with st.expander(f"{file_info['display_name']} ({result['match_count']} matches)"):
-                        # Add tabs for summary and transcript matches
-                        if result["summary_matches"] and result["transcript_matches"]:
-                            summary_tab, transcript_tab = st.tabs(["Summary Matches", "Transcript Matches"])
+                    # Display results
+                    for result in results:
+                        file_info = result["file_info"]
+                        
+                        # For semantic search, show the score
+                        if st.session_state.search_type == "semantic" and "semantic_score" in result:
+                            score_percentage = int(result["semantic_score"] * 100)
+                            expander_title = f"{file_info['display_name']} ({result['match_count']} matches, {score_percentage}% relevance)"
+                        else:
+                            expander_title = f"{file_info['display_name']} ({result['match_count']} matches)"
+                        
+                        with st.expander(expander_title):
+                            # Add tabs for summary and transcript matches
+                            if result["summary_matches"] and result["transcript_matches"]:
+                                summary_tab, transcript_tab = st.tabs(["Summary Matches", "Transcript Matches"])
+                                
+                                with summary_tab:
+                                    for i, match in enumerate(result["summary_matches"]):
+                                        st.markdown(f"**Match {i+1}:**")
+                                        
+                                        # For semantic search, show the score for each match
+                                        if st.session_state.search_type == "semantic" and "semantic_score" in match:
+                                            score_percentage = int(match["semantic_score"] * 100)
+                                            st.caption(f"Relevance: {score_percentage}%")
+                                        
+                                        # For keyword search, highlight the search term
+                                        if st.session_state.search_type == "keyword":
+                                            highlighted_context = re.sub(
+                                                f"({search_query})", 
+                                                r"**\1**", 
+                                                match["context"], 
+                                                flags=re.IGNORECASE
+                                            )
+                                            st.markdown(highlighted_context)
+                                        else:
+                                            # For semantic search, just show the context
+                                            st.markdown(match["context"])
+                                        
+                                        st.divider()
+                                
+                                with transcript_tab:
+                                    for i, match in enumerate(result["transcript_matches"]):
+                                        st.markdown(f"**Match {i+1}:**")
+                                        
+                                        # For semantic search, show the score for each match
+                                        if st.session_state.search_type == "semantic" and "semantic_score" in match:
+                                            score_percentage = int(match["semantic_score"] * 100)
+                                            st.caption(f"Relevance: {score_percentage}%")
+                                        
+                                        # For keyword search, highlight the search term
+                                        if st.session_state.search_type == "keyword":
+                                            highlighted_context = re.sub(
+                                                f"({search_query})", 
+                                                r"**\1**", 
+                                                match["context"], 
+                                                flags=re.IGNORECASE
+                                            )
+                                            st.text(highlighted_context)
+                                        else:
+                                            # For semantic search, just show the context
+                                            st.text(match["context"])
+                                        
+                                        st.divider()
                             
-                            with summary_tab:
+                            elif result["summary_matches"]:
                                 for i, match in enumerate(result["summary_matches"]):
-                                    st.markdown(f"**Match {i+1}:**")
-                                    # Highlight the search term in the context
-                                    highlighted_context = re.sub(
-                                        f"({search_query})", 
-                                        r"**\1**", 
-                                        match["context"], 
-                                        flags=re.IGNORECASE
-                                    )
-                                    st.markdown(highlighted_context)
+                                    st.markdown(f"**Summary Match {i+1}:**")
+                                    
+                                    # For semantic search, show the score for each match
+                                    if st.session_state.search_type == "semantic" and "semantic_score" in match:
+                                        score_percentage = int(match["semantic_score"] * 100)
+                                        st.caption(f"Relevance: {score_percentage}%")
+                                    
+                                    # For keyword search, highlight the search term
+                                    if st.session_state.search_type == "keyword":
+                                        highlighted_context = re.sub(
+                                            f"({search_query})", 
+                                            r"**\1**", 
+                                            match["context"], 
+                                            flags=re.IGNORECASE
+                                        )
+                                        st.markdown(highlighted_context)
+                                    else:
+                                        # For semantic search, just show the context
+                                        st.markdown(match["context"])
+                                    
                                     st.divider()
                             
-                            with transcript_tab:
+                            elif result["transcript_matches"]:
                                 for i, match in enumerate(result["transcript_matches"]):
-                                    st.markdown(f"**Match {i+1}:**")
-                                    # Highlight the search term in the context
-                                    highlighted_context = re.sub(
-                                        f"({search_query})", 
-                                        r"**\1**", 
-                                        match["context"], 
-                                        flags=re.IGNORECASE
-                                    )
-                                    st.text(highlighted_context)
+                                    st.markdown(f"**Transcript Match {i+1}:**")
+                                    
+                                    # For semantic search, show the score for each match
+                                    if st.session_state.search_type == "semantic" and "semantic_score" in match:
+                                        score_percentage = int(match["semantic_score"] * 100)
+                                        st.caption(f"Relevance: {score_percentage}%")
+                                    
+                                    # For keyword search, highlight the search term
+                                    if st.session_state.search_type == "keyword":
+                                        highlighted_context = re.sub(
+                                            f"({search_query})", 
+                                            r"**\1**", 
+                                            match["context"], 
+                                            flags=re.IGNORECASE
+                                        )
+                                        st.text(highlighted_context)
+                                    else:
+                                        # For semantic search, just show the context
+                                        st.text(match["context"])
                                     st.divider()
-                        
-                        elif result["summary_matches"]:
-                            for i, match in enumerate(result["summary_matches"]):
-                                st.markdown(f"**Summary Match {i+1}:**")
-                                highlighted_context = re.sub(
-                                    f"({search_query})", 
-                                    r"**\1**", 
-                                    match["context"], 
-                                    flags=re.IGNORECASE
-                                )
-                                st.markdown(highlighted_context)
-                                st.divider()
-                        
-                        elif result["transcript_matches"]:
-                            for i, match in enumerate(result["transcript_matches"]):
-                                st.markdown(f"**Transcript Match {i+1}:**")
-                                highlighted_context = re.sub(
-                                    f"({search_query})", 
-                                    r"**\1**", 
-                                    match["context"], 
-                                    flags=re.IGNORECASE
-                                )
-                                st.text(highlighted_context)
-                                st.divider()
-                        
-                        # Add a button to view the full meeting
-                        if st.button("View Full Meeting", key=f"view_{file_info['name']}"):
-                            st.session_state.selected_tab = "viewer"
-                            st.session_state.selected_meeting = file_info["display_name"]
-                            st.rerun()
 
 def display_analytics():
     """Display analytics about meeting notes."""
@@ -489,39 +664,93 @@ def display_analytics():
 
 def main():
     """Main function to run the Streamlit app."""
-    # Add a logo or title at the top
-    st.title("📝 Meeting Notes Explorer")
+    # Add sidebar for navigation
+    st.sidebar.title("Meeting Notes Explorer")
     
-    # Initialize session state for tab selection
-    if 'selected_tab' not in st.session_state:
-        st.session_state.selected_tab = "viewer"
+    # Navigation
+    page = st.sidebar.radio("Navigation", ["Meeting Viewer", "Search", "Analytics", "Settings"])
     
-    if 'selected_meeting' not in st.session_state:
-        st.session_state.selected_meeting = None
-    
-    # Create tabs for different sections
-    tab1, tab2, tab3 = st.tabs(["Meeting Viewer", "Search", "Analytics"])
-    
-    with tab1:
+    if page == "Meeting Viewer":
         display_meeting_viewer()
-    
-    with tab2:
+    elif page == "Search":
         display_search_interface()
-    
-    with tab3:
+    elif page == "Analytics":
         display_analytics()
-    
-    # Add information section at the bottom
-    with st.expander("ℹ️ About this tool"):
-        st.write("""
-        This Meeting Notes Explorer allows you to:
-        
-        1. **View Meeting Notes**: Browse through all your meeting transcripts and summaries
-        2. **Search**: Find specific information across all your meeting notes
-        3. **Analytics**: Get insights about your meetings, including frequency, length, and action items
-        
-        The tool reads markdown files from your meeting notes directory. Each file should contain a transcript and summary section.
-        """)
+    else:  # Settings
+        display_settings()
 
+def display_settings():
+    """Display settings page."""
+    st.header("⚙️ Settings")
+    
+    # Semantic search settings
+    st.subheader("Semantic Search Settings")
+    
+    # Index management
+    st.write("Index Management")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Rebuild Search Index"):
+            meeting_files = load_meeting_files()
+            with st.spinner("Rebuilding search index..."):
+                try:
+                    search_engine = get_search_engine()
+                    search_engine.reindex_all(meeting_files)
+                    st.success("Search index rebuilt successfully!")
+                except Exception as e:
+                    st.error(f"Failed to rebuild index: {str(e)}")
+    
+    with col2:
+        if st.button("Clear Search Index"):
+            with st.spinner("Clearing search index..."):
+                try:
+                    # Create empty indices
+                    search_engine = get_search_engine()
+                    search_engine.summary_index = faiss.IndexFlatL2(search_engine.summary_index.d)
+                    search_engine.transcript_index = faiss.IndexFlatL2(search_engine.transcript_index.d)
+                    search_engine.metadata = {}
+                    search_engine.save_indices()
+                    st.success("Search index cleared successfully!")
+                except Exception as e:
+                    st.error(f"Failed to clear index: {str(e)}")
+    
+    # Display index statistics
+    try:
+        search_engine = get_search_engine()
+        st.subheader("Index Statistics")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Indexed Summaries", search_engine.summary_index.ntotal if search_engine.summary_index else 0)
+        with col2:
+            st.metric("Indexed Transcript Chunks", search_engine.transcript_index.ntotal if search_engine.transcript_index else 0)
+        
+        # Show indexed files
+        if search_engine.metadata:
+            st.subheader("Indexed Files")
+            indexed_files = []
+            for file_id, meta in search_engine.metadata.items():
+                indexed_files.append({
+                    "File": meta.get("display_name", os.path.basename(file_id)),
+                    "Last Indexed": datetime.fromtimestamp(meta.get("last_modified", 0)).strftime("%Y-%m-%d %H:%M:%S"),
+                    "Summary": "✓" if meta.get("summary_idx_active", False) else "✗",
+                    "Transcript": "✓" if any(meta.get("transcript_indices_active", [])) else "✗"
+                })
+            
+            # Convert to DataFrame for display
+            if indexed_files:
+                df = pd.DataFrame(indexed_files)
+                st.dataframe(df)
+            else:
+                st.info("No files have been indexed yet.")
+        else:
+            st.info("No files have been indexed yet.")
+    
+    except Exception as e:
+        st.error(f"Failed to load index statistics: {str(e)}")
+
+# Run the app
 if __name__ == "__main__":
     main()

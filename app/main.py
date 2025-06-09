@@ -173,7 +173,7 @@ async def summarize_meeting(request: Request, transcript: str = Body(..., embed=
             for i, chunk in enumerate(chunks):
                 logger.info(f"Processing chunk {i+1}/{len(chunks)}")
                 chunk_prompt = f"""
-Summarize this part of a meeting transcript. Focus on key points and any action items mentioned:
+Summarize this part of a meeting transcript. Include all important discussion points, names, places, and activities mentioned. 
 
 {chunk}
 """
