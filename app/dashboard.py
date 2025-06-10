@@ -168,15 +168,15 @@ def batch_process_directory():
                 # Update progress
                 progress_bar.progress((i + 1) / len(mp3_files))
         
-        # Delete original MP3 files
-        status_text.text("Cleaning up original MP3 files...")
-        for file_path in mp3_files:
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                st.warning(f"Could not delete {file_path}: {str(e)}")
-        
-        status_text.text("Batch processing completed!")
+            # Delete original MP3 files
+            status_text.text("Cleaning up original MP3 files...")
+            for file_path in mp3_files:
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    st.warning(f"Could not delete {file_path}: {str(e)}")
+            
+            status_text.text("Batch processing completed!")
         
         # Display results
         st.subheader("Processing Results")

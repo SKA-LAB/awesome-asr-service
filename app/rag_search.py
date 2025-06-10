@@ -15,7 +15,7 @@ logger = logging.getLogger("rag-search")
 
 # Constants
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
 MAX_CONTEXT_CHUNKS = 5
 
 class RAGResponseFormat(BaseModel):
