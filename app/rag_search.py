@@ -15,8 +15,8 @@ logger = logging.getLogger("rag-search")
 
 # Constants
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
-MAX_CONTEXT_CHUNKS = 5
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b")
+MAX_CONTEXT_CHUNKS = 4
 
 class RAGResponseFormat(BaseModel):
     answer: str = Field(description="The final answer provided with structure and detail.")
@@ -45,7 +45,7 @@ class RAGSearchEngine:
         system_message = """You are an intelligent meeting assistant that helps users find information in meeting notes.
 You maintain conversation context and can refer to previous messages in the conversation.
 Use the search tools to find relevant information in meeting summaries and transcripts.
-Go deep in your search to find the most relevant information. You may have to do follow-up searches based on the results of previous searches to find a complete answer.
+Go deep in your search to find the most relevant information. You may have to do follow-up searches with different keywords based on the results of previous searches to find a complete answer.
 Always provide specific and relevant answers based on the retrieved information.
 If you can't find relevant information, admit that you don't know.
 When responding, include your answer, rationale, and source materials used.

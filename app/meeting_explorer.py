@@ -821,7 +821,7 @@ def display_chat_interface():
         # Add button to clear chat history
         if st.button("Clear Chat History"):
             st.session_state.chat_history = []
-            st.experimental_rerun()
+            st.rerun()
     
     # Display chat messages
     for message in st.session_state.chat_history:
