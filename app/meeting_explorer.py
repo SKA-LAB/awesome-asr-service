@@ -12,6 +12,9 @@ import indexing_utils
 import time
 from semantic_search import get_search_engine
 from rag_search import get_rag_search_engine
+import torch
+
+torch.classes.__path__ = [] # add this line to manually set it to empty.
 
 # Initialize session state for search type
 if 'search_type' not in st.session_state:
@@ -278,7 +281,7 @@ def display_search_interface():
     # Add search type selector
     search_type = st.radio(
         "Search Type",
-        ["Keyword Search", "Semantic Search", "RAG Search (AI-powered)"],
+        ["Keyword Search", "Semantic Search", "Smart Search (AI-powered)"],
         horizontal=True,
         index=0 if st.session_state.search_type == "keyword" else 
               1 if st.session_state.search_type == "semantic" else 2
@@ -369,7 +372,7 @@ def display_search_interface():
             st.warning("Please select at least one area to search in (Summaries or Transcripts)")
         else:
             # Show search type
-            search_type_display = "RAG Search (AI-powered)" if st.session_state.search_type == "rag" else \
+            search_type_display = "Smart Search (AI-powered)" if st.session_state.search_type == "rag" else \
                                  "Semantic Search" if st.session_state.search_type == "semantic" else "Keyword Search"
             st.info(f"Performing {search_type_display} for '{search_query}'")
             
@@ -668,12 +671,14 @@ def main():
     st.sidebar.title("Meeting Notes Explorer")
     
     # Navigation
-    page = st.sidebar.radio("Navigation", ["Meeting Viewer", "Search", "Analytics", "Settings"])
+    page = st.sidebar.radio("Navigation", ["Meeting Viewer", "Search", "Chat", "Analytics", "Settings"])
     
     if page == "Meeting Viewer":
         display_meeting_viewer()
     elif page == "Search":
         display_search_interface()
+    elif page == "Chat":
+        display_chat_interface()
     elif page == "Analytics":
         display_analytics()
     else:  # Settings
@@ -750,6 +755,129 @@ def display_settings():
     
     except Exception as e:
         st.error(f"Failed to load index statistics: {str(e)}")
+
+
+def display_chat_interface():
+    """Display the conversational chat interface."""
+    st.header("💬 Chat with Meeting Notes")
+    
+    # Initialize chat history in session state if it doesn't exist
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    
+    # Load meeting files for filtering
+    meeting_files = load_meeting_files()
+    
+    if not meeting_files:
+        st.warning("No meeting notes found. Please check the meeting notes directory.")
+        return
+    
+    # Sidebar for chat settings
+    with st.sidebar:
+        st.subheader("Chat Settings")
+        
+        # Date range filter
+        st.write("Filter by Date")
+        
+        # Get min and max dates from files
+        dates = [file["date"] for file in meeting_files]
+        min_date = min(dates).date() if dates else datetime.now().date()
+        max_date = max(dates).date() if dates else datetime.now().date()
+        
+        start_date = st.date_input("From", min_date, min_value=min_date, max_value=max_date, key="chat_start_date")
+        end_date = st.date_input("To", max_date, min_value=min_date, max_value=max_date, key="chat_end_date")
+        
+        # Filter files by date
+        filtered_files = [
+            file for file in meeting_files 
+            if start_date <= file["date"].date() <= end_date
+        ]
+        
+        # Allow selecting specific meetings
+        st.write("Select Meetings")
+        
+        # Create a dataframe for better display
+        df = pd.DataFrame([
+            {"Meeting": file["display_name"], "Date": file["date"].strftime("%Y-%m-%d %H:%M")}
+            for file in filtered_files
+        ])
+        
+        # Display as a table with selection
+        selection = st.multiselect(
+            "Select specific meetings (leave empty to use all)",
+            options=df["Meeting"].tolist(),
+            default=[],
+            key="chat_meeting_selection"
+        )
+        
+        # Filter files based on selection
+        if selection:
+            search_files = [file for file in filtered_files if file["display_name"] in selection]
+        else:
+            search_files = filtered_files
+        
+        st.caption(f"Using {len(search_files)} meeting notes as context")
+        
+        # Add button to clear chat history
+        if st.button("Clear Chat History"):
+            st.session_state.chat_history = []
+            st.experimental_rerun()
+    
+    # Display chat messages
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Chat input
+    user_input = st.chat_input("Ask about your meetings...")
+    
+    if user_input:
+        # Add user message to chat history
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        
+        # Display assistant response with a spinner
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    # Get RAG search engine
+                    rag_engine = get_rag_search_engine()
+                    
+                    # Format chat history for the RAG engine
+                    formatted_history = []
+                    for msg in st.session_state.chat_history[:-1]:  # Exclude the current message
+                        formatted_history.append((msg["role"], msg["content"]))
+                    
+                    # Perform RAG search with chat history context
+                    response = rag_engine.search_with_history(user_input, formatted_history)
+                    
+                    if response["success"]:
+                        answer = response["answer"]
+                        st.markdown(answer)
+                        
+                        # Show thought process and snippets in expanders
+                        with st.expander("View reasoning process"):
+                            st.markdown(response["thought_process"])
+                        
+                        with st.expander("View source snippets"):
+                            if isinstance(response["snippets"], list):
+                                st.markdown("\n\n".join(response["snippets"]))
+                            else:
+                                st.markdown(response["snippets"])
+                    else:
+                        error_message = "I'm sorry, I couldn't process your request. Please try again or rephrase your question."
+                        st.error(error_message)
+                        answer = error_message
+                except Exception as e:
+                    error_message = f"Error: {str(e)}"
+                    st.error(error_message)
+                    answer = f"I'm sorry, an error occurred: {str(e)}"
+                
+                # Add assistant response to chat history
+                st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
 # Run the app
 if __name__ == "__main__":

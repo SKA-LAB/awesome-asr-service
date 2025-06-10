@@ -26,6 +26,7 @@ RUN pip install -r requirements.txt
 
 # Download the ASR model during build time
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base')"
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-TinyBERT-L-2-v2')"
 
 # Create directory for temporary files
 RUN mkdir -p /app/tmp

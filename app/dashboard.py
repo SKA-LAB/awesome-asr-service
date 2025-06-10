@@ -145,27 +145,28 @@ def batch_process_directory():
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Process each file
-        results = []
-        for i, file_path in enumerate(mp3_files):
-            filename = os.path.basename(file_path)
-            status_text.text(f"Processing file {i+1}/{len(mp3_files)}: {filename}")
-            
-            # Process the file
-            result = process_single_file(
-                file_path, 
-                save_to_file=save_to_file, 
-                save_to_notion=save_to_notion,
-                meeting_date=meeting_date,
-                participants_list=participants_list
-            )
-            
-            # Store result
-            result["filename"] = filename
-            results.append(result)
-            
-            # Update progress
-            progress_bar.progress((i + 1) / len(mp3_files))
+        # Process each file within a spinner
+        with st.spinner("Processing MP3 files..."):
+            results = []
+            for i, file_path in enumerate(mp3_files):
+                filename = os.path.basename(file_path)
+                status_text.text(f"Processing file {i+1}/{len(mp3_files)}: {filename}")
+                
+                # Process the file
+                result = process_single_file(
+                    file_path, 
+                    save_to_file=save_to_file, 
+                    save_to_notion=save_to_notion,
+                    meeting_date=meeting_date,
+                    participants_list=participants_list
+                )
+                
+                # Store result
+                result["filename"] = filename
+                results.append(result)
+                
+                # Update progress
+                progress_bar.progress((i + 1) / len(mp3_files))
         
         # Delete original MP3 files
         status_text.text("Cleaning up original MP3 files...")
