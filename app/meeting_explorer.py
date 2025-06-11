@@ -382,7 +382,7 @@ def display_search_interface():
                 # Perform RAG search
                 with st.spinner("AI is analyzing your query and searching through meetings..."):
                     try:
-                        rag_engine = get_rag_search_engine()
+                        rag_engine = get_rag_search_engine(search_files)
                         rag_results = rag_engine.search(search_query)
                         search_time = time.time() - start_time
                         
@@ -844,7 +844,7 @@ def display_chat_interface():
             with st.spinner("Thinking..."):
                 try:
                     # Get RAG search engine
-                    rag_engine = get_rag_search_engine()
+                    rag_engine = get_rag_search_engine(search_files)
                     
                     # Format chat history for the RAG engine
                     formatted_history = []

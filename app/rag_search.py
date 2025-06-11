@@ -6,8 +6,10 @@ from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from meeting_reranker import MeetingNotesReRanker
-from semantic_search import get_search_engine
+from indexing_utils import perform_semantic_search
+from action_items_extractor import ActionItemsExtractor
 from timeit import default_timer as timer
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -15,37 +17,40 @@ logger = logging.getLogger("rag-search")
 
 # Constants
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b")
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
 MAX_CONTEXT_CHUNKS = 4
 
 class RAGResponseFormat(BaseModel):
     answer: str = Field(description="The final answer provided with structure and detail.")
     rationale: str = Field(description="The rationale used to arrive at the answer based on the retrieved information.")
-    snippets: List[str] = Field(description="Complete list of relevant snippets from meetings used to arrive at the answer.")
+    snippets: List[str] = Field(description="Complete list of short snippets from meetings used to arrive at the answer.")
 
 class RAGSearchEngine:
-    def __init__(self):
+    def __init__(self, limit_files: List[str] = None):
         self.llm = ChatOllama(base_url=OLLAMA_BASE_URL,
                               model=LLM_MODEL,
                               temperature=0.5,
                               num_ctx=100000)
-        self.search_engine = get_search_engine()
         self.reranker = MeetingNotesReRanker()
+        self.action_items_extractor = ActionItemsExtractor()
         self.agent = self._create_agent()
+        self.search_files = limit_files
     
     def _create_agent(self):
         """Create a ReAct agent for RAG search."""
         # Define the tools the agent can use
         tools = [
             self._search_summaries,
-            self._search_transcripts
+            self._search_transcripts,
+            self._extract_action_items,
         ]
         
         # Create the ReAct agent
-        system_message = """You are an intelligent meeting assistant that helps users find information in meeting notes.
+        system_message = """You are an intelligent meeting assistant that helps users find information in meeting notes and answer general questions.
 You maintain conversation context and can refer to previous messages in the conversation.
 Use the search tools to find relevant information in meeting summaries and transcripts.
-Go deep in your search to find the most relevant information. You may have to do follow-up searches with different keywords based on the results of previous searches to find a complete answer.
+Go deep in your search to find the most relevant information.
+You may have to do follow-up searches based on the results of previous searches.
 Always provide specific and relevant answers based on the retrieved information.
 If you can't find relevant information, admit that you don't know.
 When responding, include your answer, rationale, and source materials used.
@@ -61,8 +66,45 @@ When referring to previous parts of the conversation, be specific about what was
                                    response_format=RAGResponseFormat)
         return agent
     
+    def _extract_action_items(self, date_range: str = "") -> str:
+        """
+        Extract action items from meeting notes within a date range.
+        
+        Args:
+            date_range: Optional string specifying the date range in format 'YYYY-MM-DD to YYYY-MM-DD'
+                        If not provided, all meetings will be included
+        
+        Returns:
+            Formatted string of action items
+        """
+        logger.info(f"Extracting action items with date range: {date_range}")
+
+        # Parse date range if provided
+        start_date = None
+        end_date = None
+        
+        if date_range:
+            try:
+                # Try to parse different date range formats
+                if " to " in date_range:
+                    start_str, end_str = date_range.split(" to ")
+                    start_date = datetime.strptime(start_str.strip(), "%Y-%m-%d")
+                    end_date = datetime.strptime(end_str.strip(), "%Y-%m-%d")
+                elif "-" in date_range and len(date_range.split("-")) == 3:
+                    # Single date
+                    single_date = datetime.strptime(date_range.strip(), "%Y-%m-%d")
+                    start_date = single_date
+                    end_date = single_date
+            except ValueError:
+                return "Invalid date range format. Please use 'YYYY-MM-DD to YYYY-MM-DD' format."
+            
+        # Extract action items
+        action_items_text = self.action_items_extractor.extract_from_files(self.search_files, start_date, end_date)
+        
+        return action_items_text
+    
     def _search_summaries(self, query: str) -> str:
-        """Search in meeting summaries."""
+        """Search in meeting summaries with a query."""
         logger.info(f"Searching summaries for: {query}")
         results = self._perform_search(query, search_in_summaries=True, search_in_transcripts=False)
         
@@ -79,7 +121,7 @@ When referring to previous parts of the conversation, be specific about what was
         return "\n\n".join(formatted_results)
     
     def _search_transcripts(self, query: str) -> str:
-        """Search in meeting transcripts."""
+        """Search in meeting transcripts with a query."""
         logger.info(f"Searching transcripts for: {query}")
         results = self._perform_search(query, search_in_summaries=False, search_in_transcripts=True)
         
@@ -98,83 +140,18 @@ When referring to previous parts of the conversation, be specific about what was
     def _perform_search(self, query: str, search_in_summaries: bool = True, search_in_transcripts: bool = True) -> List[Dict[str, Any]]:
         """Perform semantic search using the FAISS index."""
         try:
-            # Get all indexed files
-            indexed_files = []
-            for file_id, meta in self.search_engine.metadata.items():
-                indexed_files.append({
-                    "path": file_id,
-                    "display_name": meta.get("display_name", os.path.basename(file_id))
-                })
-            
             # Perform semantic search
             initial_k = 30  # initially retrieve a large number of results that will be reranked
             tic = timer()
-            results = self.search_engine.search(
+            result_list = perform_semantic_search(
                 query,
+                self.search_files,
                 search_in_summaries=search_in_summaries,
                 search_in_transcripts=search_in_transcripts,
                 top_k=initial_k
             )
             toc = timer()
             logger.info(f"Semantic search took {toc - tic:.2f} seconds")
-            
-            # Format results similar to indexing_utils.perform_semantic_search
-            formatted_results = []
-            for result in results:
-                # Find the corresponding file_info
-                file_info = next((file for file in indexed_files if file["path"] == result["file_id"]), None)
-                if not file_info:
-                    continue
-                    
-                # Format the result
-                formatted_result = {
-                    "file_info": file_info,
-                    "summary_matches": [],
-                    "transcript_matches": [],
-                    "match_count": 1,
-                    "semantic_score": 1.0 - min(1.0, result["distance"] / 2.0)
-                }
-                
-                # Add the match to the appropriate list
-                if result["type"] == "summary":
-                    formatted_result["summary_matches"].append({
-                        "context": result["context"],
-                        "type": "summary",
-                        "semantic_score": formatted_result["semantic_score"]
-                    })
-                else:  # transcript
-                    formatted_result["transcript_matches"].append({
-                        "context": result["context"],
-                        "type": "transcript",
-                        "semantic_score": formatted_result["semantic_score"]
-                    })
-                
-                formatted_results.append(formatted_result)
-            
-            # Combine results for the same file
-            combined_results = {}
-            for result in formatted_results:
-                file_path = result["file_info"]["path"]
-                
-                if file_path not in combined_results:
-                    combined_results[file_path] = result
-                else:
-                    # Update match count
-                    combined_results[file_path]["match_count"] += result["match_count"]
-                    
-                    # Combine matches
-                    combined_results[file_path]["summary_matches"].extend(result["summary_matches"])
-                    combined_results[file_path]["transcript_matches"].extend(result["transcript_matches"])
-                    
-                    # Update semantic score to the highest score
-                    combined_results[file_path]["semantic_score"] = max(
-                        combined_results[file_path]["semantic_score"],
-                        result["semantic_score"]
-                    )
-            
-            # Convert back to list and sort by semantic score
-            result_list = list(combined_results.values())
-            result_list.sort(key=lambda x: x["semantic_score"], reverse=True)
 
             # Apply meeting-specific re-ranking
             tic = timer()
@@ -301,9 +278,9 @@ When referring to previous parts of the conversation, be specific about what was
 # Singleton instance
 _rag_search_instance = None
 
-def get_rag_search_engine() -> RAGSearchEngine:
+def get_rag_search_engine(search_files: List[str]=None) -> RAGSearchEngine:
     """Get or create the RAG search engine instance."""
     global _rag_search_instance
     if _rag_search_instance is None:
-        _rag_search_instance = RAGSearchEngine()
+        _rag_search_instance = RAGSearchEngine(search_files)
     return _rag_search_instance
