@@ -22,23 +22,24 @@ A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featur
 
 ### Using Docker
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/asr-service-fast-api.git
-   cd asr-service-fast-api
-   ```
-2. Ensure [Ollama](https://ollama.com/download) is installed and running on your machine. 
-3. Pull down necessary models.
+1. Ensure [Ollama](https://ollama.com/download) is installed and running on your machine. 
+2. Pull down necessary models.
     ```bash
    ollama pull qwen2.5:7b
    ollama pull all-minilm
    ```
-4. Build and run with Docker. Mount the directory with mp3 recordings of meeting audio and empty directory for meeting notes to the container.
+3. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/asr-service-fast-api.git
+   cd asr-service-fast-api
+   ```
+4. *Optional* Set up integration with [Notion](https://www.notion.com/) by creating a .env file. Details at the end of the ReadMe. 
+5. Build and run with Docker. Mount the directory with mp3 recordings of meeting audio and empty directory for meeting notes to the container.
     ```bash
     docker build -t asr-service .
     docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /path/to/meeting-notes:/meeting-notes -v /path/to/meeting/meeting-recordings:/meeting-recordings --name asr-service-local --rm asr-service
     ```
-5. Visit http://localhost:8586 and http://localhost:8587 to see meeting audio processor and explorer UI
+6. Visit http://localhost:8586 and http://localhost:8587 to see meeting audio processor and explorer UI
 
 ## How-to
 
@@ -127,5 +128,19 @@ All functionality is also available via API endpoints:
 
 This workflow allows you to efficiently process meeting recordings, explore the resulting notes through various interfaces, and leverage AI capabilities to extract maximum value from your meeting content.
 
+## Optional: Notion API Integration
+Set up integration with [Notion](https://www.notion.com/) by creating a `.env` file in the project root directory:
 
+    NOTION_TOKEN=your_notion_integration_token
+    NOTION_DATABASE_ID=your_notion_database_id
 
+To set up Notion integration:
+1. Create a Notion integration at https://www.notion.so/my-integrations
+2. Copy the "Internal Integration Token" to use as your `NOTION_TOKEN`
+3. Create a database in Notion to store your meeting notes
+4. Share your database with the integration you created
+5. Get your database ID from the URL of your database page:
+   - The URL format is: `https://www.notion.so/{workspace}/{database_id}?v={view_id}`
+   - Copy the part between the workspace name and the question mark as your `NOTION_DATABASE_ID`
+
+When enabled, meeting transcripts and summaries will be automatically saved to your Notion database.
