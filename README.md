@@ -1,6 +1,6 @@
 # ASR Service with FastAPI
 
-A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featuring semantic search capabilities, RAG (Retrieval-Augmented Generation), meeting notes analysis, and free-form LLM-enabled chat with Streamlit dashboards for UI all running as a service within one container.
+A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featuring semantic search capabilities, RAG (Retrieval-Augmented Generation), meeting notes analysis, and free-form LLM-enabled chat with Streamlit dashboards for UI all running as a service within one container on your machine. 
 
 ## 🌟 Features
 
@@ -27,17 +27,18 @@ A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featur
    git clone https://github.com/yourusername/asr-service-fast-api.git
    cd asr-service-fast-api
    ```
-2. Ensure [Ollama](https://ollama.com/download) is installed and running on your machine. Pull down necessary models.
+2. Ensure [Ollama](https://ollama.com/download) is installed and running on your machine. 
+3. Pull down necessary models.
     ```bash
    ollama pull qwen2.5:7b
    ollama pull all-minilm
    ```
-3. Build and run with Docker. Mount the directory with mp3 recordings of meeting audio and empty directory for meeting notes to the container.
+4. Build and run with Docker. Mount the directory with mp3 recordings of meeting audio and empty directory for meeting notes to the container.
     ```bash
     docker build -t asr-service .
-    docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /path/to/meeting-notes:/meeting-notes -v /path/to/meeting/mp3/recordings:/meeting-recordings --name asr-service-local --rm asr-service
+    docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /path/to/meeting-notes:/meeting-notes -v /path/to/meeting/meeting-recordings:/meeting-recordings --name asr-service-local --rm asr-service
     ```
-4. Visit http://localhost:8586 and http://localhost:8587 to see meeting audio processor and explorer UI
+5. Visit http://localhost:8586 and http://localhost:8587 to see meeting audio processor and explorer UI
 
 ## How-to
 
