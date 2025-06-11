@@ -383,7 +383,7 @@ def display_search_interface():
                 with st.spinner("AI is analyzing your query and searching through meetings..."):
                     try:
                         rag_engine = get_rag_search_engine(search_files)
-                        rag_results = rag_engine.search(search_query)
+                        rag_results = rag_engine.search_with_history(search_query)
                         search_time = time.time() - start_time
                         
                         if rag_results["success"]:
@@ -393,12 +393,9 @@ def display_search_interface():
                             st.subheader("AI Answer")
                             st.markdown(rag_results["answer"])
                             
-                            # Show thought process in an expander
-                            with st.expander("View AI reasoning process"):
-                                st.markdown(rag_results["thought_process"])
-                            # Display snippets in an expander
-                            with st.expander("View AI snippets"):
-                                st.markdown("\n\n".join(rag_results["snippets"]))
+                            # Display context used in an expander
+                            with st.expander("View context used from meeting notes to generate answer"):
+                                st.markdown(rag_results["context_used"])
                         else:
                             st.error("AI search failed. Please try another search type or refine your query.")
                     except Exception as e:
@@ -858,15 +855,8 @@ def display_chat_interface():
                         answer = response["answer"]
                         st.markdown(answer)
                         
-                        # Show thought process and snippets in expanders
-                        with st.expander("View reasoning process"):
-                            st.markdown(response["thought_process"])
-                        
-                        with st.expander("View source snippets"):
-                            if isinstance(response["snippets"], list):
-                                st.markdown("\n\n".join(response["snippets"]))
-                            else:
-                                st.markdown(response["snippets"])
+                        with st.expander("View context used"):
+                            st.markdown(response["context_used"])
                     else:
                         error_message = "I'm sorry, I couldn't process your request. Please try again or rephrase your question."
                         st.error(error_message)

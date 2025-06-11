@@ -89,8 +89,11 @@ def perform_semantic_search(
     )
     
     # Filter results to only include files in the provided list
-    file_paths = {file["path"] for file in files}
-    filtered_results = [result for result in semantic_results if result["file_id"] in file_paths]
+    if files:
+        file_paths = {file["path"] for file in files}
+        filtered_results = [result for result in semantic_results if result["file_id"] in file_paths]
+    else:
+        filtered_results = semantic_results
     
     # Format results for display
     formatted_results = []
