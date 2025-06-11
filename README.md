@@ -33,7 +33,8 @@ A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featur
    git clone https://github.com/yourusername/asr-service-fast-api.git
    cd asr-service-fast-api
    ```
-4. *Optional* Set up integration with [Notion](https://www.notion.com/) by creating a .env file. Details at the end of the ReadMe. 
+4. Create an empty .env file to set up Notion integration, if desired.
+   - *Optional* Set up integration with [Notion](https://www.notion.com/) by defining variables in a .env file. Details at the end of the ReadMe. 
 5. Build and run with Docker. Mount the directory with mp3 recordings of meeting audio and empty directory for meeting notes to the container.
     ```bash
     docker build -t asr-service .

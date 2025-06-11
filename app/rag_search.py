@@ -51,7 +51,7 @@ Always provide specific and relevant answers based on the retrieved information.
 If you can't find relevant information, admit that you don't know.
 When responding, include your answer, rationale, and source materials used.
 When referring to previous parts of the conversation, be specific about what was discussed.
-Today's date is {datetime.now().strftime('%Y-%m-%d')}, use this information as needed to contextualize dates and times in meetings that may have happened in the past."""
+Today's date is {datetime.now().strftime('%Y-%m-%d')} and it is a {datetime.now().weekday()}, use this information as needed to contextualize dates and times in meetings that may have happened in the past."""
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_message),

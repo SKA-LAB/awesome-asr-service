@@ -37,7 +37,8 @@ RUN mkdir /meeting-recordings
 COPY app/ /app/app/
 COPY run.sh /app/
 COPY chunk_mp3.sh /app/
-COPY .env .
+COPY .env /app/
+
 
 # Make run script executable
 RUN chmod +x /app/run.sh
