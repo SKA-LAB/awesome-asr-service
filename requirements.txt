@@ -12,7 +12,7 @@ langgraph-prebuilt==0.1.8
 langgraph-sdk==0.1.69
 langsmith==0.3.28
 streamlit
-requests
+requests==2.27.1
 slowapi
 faster-whisper
 python-dotenv
@@ -23,3 +23,5 @@ pandas
 faiss-cpu
 pydantic
 sentence-transformers
+pytest
+pytest-cov

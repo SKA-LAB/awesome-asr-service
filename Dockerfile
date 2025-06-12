@@ -35,14 +35,16 @@ RUN mkdir /meeting-recordings
 
 # Copy application code
 COPY app/ /app/app/
+COPY tests/ /app/tests/
 COPY run.sh /app/
 COPY chunk_mp3.sh /app/
+COPY run_tests.sh /app/
 COPY .env /app/
-
 
 # Make run script executable
 RUN chmod +x /app/run.sh
 RUN chmod +x /app/chunk_mp3.sh
+RUN chmod +x /app/run_tests.sh
 
 # Set environment variables
 ENV TEMP_DIR=/app/tmp
@@ -62,6 +64,9 @@ ENV CHUNK_SCRIPT=/app/chunk_mp3.sh
 EXPOSE 8000
 EXPOSE 8501
 EXPOSE 8502
+
+# Run tests before completing the build
+RUN /app/run_tests.sh
 
 # Run the application with the script
 CMD ["/app/run.sh"]

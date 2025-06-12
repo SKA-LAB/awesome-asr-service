@@ -13,6 +13,8 @@ import logging
 import time
 from fastapi.middleware.cors import CORSMiddleware
 from app.notion_integration import NotionIntegration
+from semantic_search import get_search_engine
+from rag_search import get_rag_search_engine
 from datetime import datetime
 from typing import Optional, List
 
@@ -491,6 +493,148 @@ async def health_check(request: Request):
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}", exc_info=True)
         return JSONResponse(status_code=503, content={"status": "unhealthy", "error": str(e)})
+
+@app.get("/semantic-search/indexed-files")
+@limiter.limit("20/minute")
+async def get_indexed_files(request: Request):
+    """
+    Returns all filenames currently indexed in the FAISS database.
+    """
+    logger.info("Request for indexed files received")
+    try:
+        search_engine = get_search_engine()
+        
+        # Extract filenames from metadata
+        indexed_files = []
+        for file_id, meta in search_engine.metadata.items():
+            indexed_files.append({
+                "file_id": file_id,
+                "display_name": meta.get("display_name", os.path.basename(file_id)),
+                "last_modified": datetime.fromtimestamp(meta.get("last_modified", 0)).strftime("%Y-%m-%d %H:%M:%S"),
+                "summary_indexed": meta.get("summary_idx_active", False),
+                "transcript_indexed": any(meta.get("transcript_indices_active", [])),
+            })
+        
+        return {
+            "success": True,
+            "indexed_files": indexed_files,
+            "summary_count": search_engine.summary_index.ntotal if search_engine.summary_index else 0,
+            "transcript_chunk_count": search_engine.transcript_index.ntotal if search_engine.transcript_index else 0
+        }
+    except Exception as e:
+        logger.error(f"Failed to retrieve indexed files: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"success": False, "error": f"Failed to retrieve indexed files: {str(e)}"})
+
+@app.post("/semantic-search/rebuild-index")
+@limiter.limit("5/minute")
+async def rebuild_search_index(request: Request):
+    """
+    Clears the FAISS index and re-indexes all meeting files.
+    """
+    logger.info("Request to rebuild search index received")
+    try:
+        # Load all meeting files
+        from meeting_explorer import load_meeting_files
+        meeting_files = load_meeting_files()
+        
+        if not meeting_files:
+            return JSONResponse(status_code=404, content={"success": False, "error": "No meeting files found to index"})
+        
+        # Get search engine and rebuild index
+        search_engine = get_search_engine()
+        search_engine.reindex_all(meeting_files)
+        
+        return {
+            "success": True,
+            "message": f"Search index rebuilt successfully with {len(meeting_files)} files",
+            "indexed_files_count": len(meeting_files),
+            "summary_count": search_engine.summary_index.ntotal,
+            "transcript_chunk_count": search_engine.transcript_index.ntotal
+        }
+    except Exception as e:
+        logger.error(f"Failed to rebuild search index: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"success": False, "error": f"Failed to rebuild search index: {str(e)}"})
+
+@app.get("/semantic-search/search")
+@limiter.limit("20/minute")
+async def semantic_search(
+    request: Request, 
+    query: str,
+    search_in_summaries: bool = True,
+    search_in_transcripts: bool = True,
+    top_k: int = 5
+):
+    """
+    Performs a semantic search using the FAISS index and returns results based on the query.
+    """
+    logger.info(f"Semantic search request received for query: {query}")
+    
+    if not query or query.strip() == "":
+        return JSONResponse(status_code=400, content={"success": False, "error": "Query cannot be empty"})
+    
+    try:
+        # Import the function from indexing_utils
+        from app.indexing_utils import perform_semantic_search
+        
+        # Perform semantic search
+        results = perform_semantic_search(
+            query=query,
+            search_in_summaries=search_in_summaries,
+            search_in_transcripts=search_in_transcripts,
+            top_k=top_k
+        )
+        
+        return {
+            "success": True,
+            "query": query,
+            "results": results,
+            "result_count": len(results)
+        }
+    except Exception as e:
+        logger.error(f"Semantic search failed: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"success": False, "error": f"Semantic search failed: {str(e)}"})
+
+@app.post("/rag-search")
+@limiter.limit("10/minute")
+async def rag_search(
+    request: Request,
+    query: str = Body(...),
+    conversation_history: Optional[List[dict]] = Body(None),
+    limit_files: Optional[List[str]] = Body(None)
+):
+    """
+    Performs a RAG search with optional conversation history using the RAGSearchEngine.
+    
+    conversation_history format: [{"role": "user", "content": "message"}, {"role": "assistant", "content": "response"}]
+    """
+    logger.info(f"RAG search request received for query: {query}")
+    
+    if not query or query.strip() == "":
+        return JSONResponse(status_code=400, content={"success": False, "error": "Query cannot be empty"})
+    
+    try:
+        # Get RAG search engine with optional file limits
+        rag_engine = get_rag_search_engine(limit_files)
+        
+        # Format conversation history if provided
+        formatted_history = None
+        if conversation_history:
+            formatted_history = []
+            for msg in conversation_history:
+                if "role" in msg and "content" in msg:
+                    formatted_history.append((msg["role"], msg["content"]))
+        
+        # Perform RAG search with history
+        response = rag_engine.search_with_history(query, formatted_history)
+        
+        return {
+            "success": response["success"],
+            "answer": response["answer"],
+            "context_used": response["context_used"]
+        }
+    except Exception as e:
+        logger.error(f"RAG search failed: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"success": False, "error": f"RAG search failed: {str(e)}"})
 
 if __name__ == "__main__":
     import uvicorn

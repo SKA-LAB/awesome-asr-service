@@ -1,6 +1,6 @@
-# ASR Service with FastAPI
+# Meeting Notes ASR service with FastAPI and Streamlit
 
-A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featuring semantic search capabilities, RAG (Retrieval-Augmented Generation), meeting notes analysis, and free-form LLM-enabled chat with Streamlit dashboards for UI all running as a service within one container on your machine. 
+A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featuring semantic search capabilities, RAG (Retrieval-Augmented Generation), meeting notes analysis, and free-form LLM-enabled chat with Streamlit dashboards for UI all running as a service within one container on your machine, fully locally.
 
 ## 🌟 Features
 
@@ -16,6 +16,7 @@ A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featur
 
 - Python 3.11
 - Docker
+- Supports mp3 and m4a audio file types
 - No GPU required (tested on Macbook Pro and Air with M2-M3 chips)
 
 ## 🚀 Quick Start
@@ -35,10 +36,14 @@ A powerful Automatic Speech Recognition (ASR) service built with FastAPI, featur
    ```
 4. Create an empty .env file to set up Notion integration, if desired.
    - *Optional* Set up integration with [Notion](https://www.notion.com/) by defining variables in a .env file. Details at the end of the ReadMe. 
-5. Build and run with Docker. Mount the directory with mp3 recordings of meeting audio and empty directory for meeting notes to the container.
+5. Build and run with Docker.
     ```bash
     docker build -t asr-service .
-    docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /path/to/meeting-notes:/meeting-notes -v /path/to/meeting/meeting-recordings:/meeting-recordings --name asr-service-local --rm asr-service
+    docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v --name asr-service-local --rm asr-service
+    ```
+    - *Optional* If you want to use the batch-processing functionality for mp3 files and save extracted meeting notes locally on your host machine use this docker run command instead
+    ```bash
+   docker run -p 8585:8000 -p 8586:8501 -p 8587:8502 -v /path/to/your/meeting-notes:/meeting-notes -v /path/to/your/meeting-recordings:/meeting-recordings --name asr-service-local --rm asr-service
     ```
 6. Visit http://localhost:8586 and http://localhost:8587 to see meeting audio processor and explorer UI
 
@@ -145,3 +150,17 @@ To set up Notion integration:
    - Copy the part between the workspace name and the question mark as your `NOTION_DATABASE_ID`
 
 When enabled, meeting transcripts and summaries will be automatically saved to your Notion database.
+
+## Citation
+
+If you use this project in your research or work, please cite it using the following BibTeX entries:
+
+```bibtex
+@misc{awesome-asr-service,
+  author = {Bhattacharya, Kiran},
+  title = {Meeting Notes ASR Service and Dataset},
+  year = {2025},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/SKA-LAB/awesome-asr-service}},
+}
